@@ -1,0 +1,156 @@
+#----------------------------------Initialization-----------------------------------
+variable		Ocount loop 1
+variable		wO index 0.06
+
+label		Ichange
+
+variable		Icount loop 1
+variable		wI index 1.0
+
+#shell		mkdir wettability_wO_${wO}_wI_${wI}
+shell		cd wettability_wO_${wO}_wI_${wI}
+
+label		fchange
+
+variable		fcount loop 6
+variable		f index 0.3 0.4 0.5 0.6 0.7 0.8	#Percentage of hydrophilic area
+
+log			log_ncl_restart_$f.txt
+#processors		* * * grid numa
+#package		intel 0 omp 1
+#units			metal
+dimension		3
+#boundary		p f p
+#atom_style		atomic
+
+
+variable		t equal 100
+#variable		wI equal 1.0
+#variable		wO equal 0.02
+variable		a equal 5.85
+variable		b equal 3.615
+variable		h1 equal $(v_a*5.00)	#height of argon layer
+variable		h2 equal $(v_b*4.00)
+variable		l equal $(v_a*10.0)	#height of copper layer
+variable		d equal 1.0
+variable		thi equal 110
+variable		tlo equal 90
+
+variable		fI equal $f	#Percentage of hydrophilic area
+variable		volume equal $(v_l*v_l*v_h1)
+
+#---------------------------------System Definition---------------------------------
+
+#Set up atoms
+
+read_restart		pp_restart_ncl_ITR_$f.bin
+ 
+
+region			B block 0 $l  $(v_h2+v_d) $(v_h2+v_h1) 0 $l units box
+region			A1 block 0 $l 0 ${h2} 0 $l units box
+region			A2 block 0 $l $(v_h1+v_h2+v_d) $(v_h1+2*v_h2+v_d) 0 $l units box
+region			A1I block 0 $(v_f*v_l) 0 ${h2} 0 $l units box
+region			A1O block $(v_f*v_l) $l 0 ${h2} 0 $l units box
+region			A2I block 0 $(v_f*v_l) $(v_h1+v_h2) $(v_h1+2*v_h2) 0 $l units box
+region			A2O block $(v_f*v_l) $l $(v_h1+v_h2) $(v_h1+2*v_h2) 0 $l units box
+region			fluid block INF INF 0.5 $(v_h1) INF INF units box
+
+
+
+#group			ar type 1
+#group			cuI type 2		#hydrophIllic
+#group			cuO type 3		#hydrophObic
+#group			cu union cuI cuO
+
+
+#Fixing the top and bottom layer
+
+variable		topedge equal bound(cu,ymax)
+variable		bottomedge equal bound(cu,ymin)
+region			toplayer block INF INF $(v_topedge-0.3*v_b) ${topedge} INF INF units box
+region			bottomlayer block INF INF ${bottomedge} $(v_bottomedge+0.3*v_b) INF INF units box
+region			rsink block INF INF $(v_topedge-1.33*v_b) $(v_topedge-0.33*v_b) INF INF units box
+region			rsource block INF INF $(v_bottomedge+0.33*v_b) $(v_bottomedge+1.33*v_b) INF INF units box
+group			top region toplayer
+group			bottom region bottomlayer
+group			source region rsource
+group			sink region rsink
+
+fix			ft top setforce NULL 0.0 NULL
+fix			fb bottom setforce NULL 0.0 NULL
+velocity		top set NULL 0.0 NULL
+velocity		bottom set NULL 0.0 NULL
+
+
+#---------------------------------Simulation Settings---------------------------------------
+
+#force field
+
+pair_style	hybrid lj/cut 8.5 eam
+pair_coeff	2*3 2*3 eam Cu_u3.eam
+pair_coeff	1 1 lj/cut 0.0103 3.405 8.5
+pair_coeff	1 2 lj/cut $(v_wI*0.06489) 2.872 11.9
+pair_coeff	1 3 lj/cut $(v_wO*0.06489) 2.872 11.9
+
+neighbor	0.35 bin
+neigh_modify	delay 1
+
+#settings
+
+#timestep	0.005
+
+#Apply fix
+
+#fix		1 cu spring/self 4.3
+
+fix			ft top setforce 0.0 0.0 0.0
+fix			fb bottom setforce 0.0 0.0 0.0
+velocity		top set 0.0 0.0 0
+velocity		bottom set 0.0 0.0 0
+
+#shell		mkdir trajectory_ncl_$f
+#shell		cd trajectory_ncl_$f
+
+#dump		1 all custom 100 tarj.all_atom.*.txt id type x y z
+#dump			1 all atom 1000 traj_all_atom_*.txt
+#run		3000  
+
+#shell		cd ..
+#undump		1
+
+compute		arTemp ar temp
+compute		cuTemp cu temp 
+compute		Thot all temp/region rsource
+compute		Tcold all temp/region rsink
+compute		perke all ke/atom
+variable	pertemp atom c_perke/(1.5*8.6173303e-5)
+compute		mychunk all chunk/atom bin/1d  y center 0.04 units reduced
+
+
+fix 		1 all nve
+fix		hot all langevin ${thi} ${thi} 1.0 58047 tally yes
+fix		cold all langevin ${tlo} ${tlo} 1.0 8545 tally yes
+fix_modify	hot temp Thot
+fix_modify	cold temp Tcold
+variable	tdiff equal c_Thot-c_Tcold
+fix		tempprofile all ave/chunk 2 1000 2000 mychunk v_pertemp file tempprofile_$f.txt
+fix		aveTemp all ave/time 1 1000 1000 v_tdiff ave running
+thermo_style	custom step temp c_Thot c_Tcold f_hot f_cold f_aveTemp
+thermo		1000
+run		1000000
+
+clear
+
+next		f
+next		fcount
+jump		SELF fchange
+
+shell	cd ..
+
+next		wI
+next		Icount
+jump		SELF Ichange
+
+next		wO
+next		Ocount
+jump		SELF

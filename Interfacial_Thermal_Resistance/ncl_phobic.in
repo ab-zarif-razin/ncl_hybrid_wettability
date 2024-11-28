@@ -1,0 +1,157 @@
+#----------------------------------Initialization-----------------------------------
+variable		f equal 0.0
+variable		wI equal 1.0
+variable		wO equal 0.06
+#shell			mkdir wettability_wO_${wO}_wI_${wI}
+shell			cd wettability_wO_0.06_wI_1.0
+
+log			log_ncl_$f.txt
+#processors		* * * grid numa
+#package		intel 0 omp 1
+units			metal
+dimension		3
+boundary		p f p
+atom_style		atomic
+
+
+variable		t equal 100
+variable		a equal 5.85
+variable		b equal 3.615
+variable		h1 equal $(v_a*5.00)	#height of argon layer
+variable		h2 equal $(v_b*4.00)
+variable		l equal $(v_a*10.0)	#height of copper layer
+variable		d equal 1.0
+variable		thi equal 110
+variable		tlo equal 90
+
+
+variable		volume equal $(v_l*v_l*v_h1)
+
+#---------------------------------System Definition---------------------------------
+
+#Simulation Box
+
+region			box block -1.5 $(v_l+1.5) -1 $(v_h1+2*v_h2+1) -1 $(v_l+1)
+create_box		3 box 
+
+#Set up atoms 
+
+region			B block 0 $l  $(v_h2+v_d) $(v_h2+v_h1) 0 $l units box
+region			A1 block 0 $l 0 ${h2} 0 $l units box
+region			A2 block 0 $l $(v_h1+v_h2+v_d) $(v_h1+2*v_h2+v_d) 0 $l units box
+#region			A1I block 0 $(v_f*v_l) 0 ${h2} 0 $l units box
+region			A1O block $(v_f*v_l) $l 0 ${h2} 0 $l units box
+#region			A2I block 0 $(v_f*v_l) $(v_h1+v_h2) $(v_h1+2*v_h2) 0 $l units box
+region			A2O block $(v_f*v_l) $l $(v_h1+v_h2) $(v_h1+2*v_h2) 0 $l units box
+region			fluid block INF INF 0.5 $(v_h1) INF INF units box
+
+
+lattice			fcc 5.85
+create_atoms		1 region B
+lattice			fcc 3.615
+#create_atoms		2 region A1I
+#create_atoms		2 region A2I
+create_atoms		3 region A1O
+create_atoms		3 region A2O
+
+group			ar type 1
+group			cuI type 2		#hydrophIllic
+group			cuO type 3		#hydrophObic
+group			cu union cuI cuO
+
+mass			1 39.95
+mass			2 63.55
+mass			3 63.55
+
+#Fixing the top and bottom layer
+
+variable		topedge equal bound(cu,ymax)
+variable		bottomedge equal bound(cu,ymin)
+region			toplayer block INF INF $(v_topedge-0.3*v_b) ${topedge} INF INF units box
+region			bottomlayer block INF INF ${bottomedge} $(v_bottomedge+0.3*v_b) INF INF units box
+region			rsink block INF INF $(v_topedge-1.33*v_b) $(v_topedge-0.33*v_b) INF INF units box
+region			rsource block INF INF $(v_bottomedge+0.33*v_b) $(v_bottomedge+1.33*v_b) INF INF units box
+group			top region toplayer
+group			bottom region bottomlayer
+group			source region rsource
+group			sink region rsink
+
+fix			ft top setforce NULL 0.0 NULL
+fix			fb bottom setforce NULL 0.0 NULL
+velocity		top set NULL 0.0 NULL
+velocity		bottom set NULL 0.0 NULL
+
+velocity		all create $t 4928459
+
+#---------------------------------Simulation Settings---------------------------------------
+
+#force field
+
+pair_style	hybrid lj/cut 8.5 eam
+pair_coeff	2*3 2*3 eam Cu_u3.eam
+pair_coeff	1 1 lj/cut 0.0103 3.405 8.5
+#pair_coeff	2 2 0.41148 2.34 6.5
+#pair_coeff	3 3 0.41148 2.34 6.5
+#pair_coeff	2 3 0.41148 2.34 6.5
+
+pair_coeff	1 2 lj/cut $(v_wI*0.06489) 2.872 11.9
+pair_coeff	1 3 lj/cut $(v_wO*0.06489) 2.872 11.9
+
+
+neighbor	0.35 bin
+neigh_modify	delay 1
+
+#settings
+
+timestep	0.005
+
+#Apply fix
+
+#fix		1 cu spring/self 4.3
+
+fix			ft top setforce 0.0 0.0 0.0
+fix			fb bottom setforce 0.0 0.0 0.0
+velocity		top set 0.0 0.0 0
+velocity		bottom set 0.0 0.0 0
+
+shell		mkdir trajectory_ncl_$f
+shell		cd trajectory_ncl_$f
+
+fix		2 ar nvt temp $t $t $(10*dt)
+fix		myfix cu nvt temp $t $t $(10*dt)
+thermo		100
+#thermo_modify	lost ignore
+#dump		1 all custom 100 tarj.all_atom.*.txt id type x y z
+dump			1 all atom 1000 traj_all_atom_*.txt
+run		3000  
+
+shell		cd ..
+undump		1
+
+compute	arTemp ar temp
+compute	cuTemp cu temp 
+thermo		10000
+thermo_style	custom step temp c_arTemp c_cuTemp etotal press  
+run		1000000
+
+write_data	pp_data_ncl_$f.txt pair ij
+write_restart	pp_restart_ncl_$f.bin
+
+unfix		2
+unfix		myfix
+
+compute		Thot all temp/region rsource
+compute		Tcold all temp/region rsink
+
+fix 		1 all nve
+fix		hot all langevin ${thi} ${thi} 1.0 58047 tally yes
+fix		cold all langevin ${tlo} ${tlo} 1.0 8545 tally yes
+fix_modify	hot temp Thot
+fix_modify	cold temp Tcold
+variable	tdiff equal c_Thot-c_Tcold
+thermo_style	custom step temp c_Thot c_Tcold f_hot f_cold v_tdiff
+thermo		10000
+run		2000000
+
+write_data	pp_data_ncl_ITR_$f.txt pair ij
+write_restart	pp_restart_ncl_ITR_$f.bin
