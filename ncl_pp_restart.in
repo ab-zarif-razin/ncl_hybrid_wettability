@@ -1,0 +1,70 @@
+#----------------------------------Initialization-----------------------------------
+
+#log			pp_log_ncl.txt
+#processors		* * * grid numa
+#package		intel 0 omp 1
+#dimension		3
+#boundary		p f p
+
+variable		t equal 100
+variable		wI equal 1.0
+variable		wO equal 0.02
+variable		f equal 0.1
+#variable		fI equal $f	#Percentage of hydrophilic area
+
+#---------------------------------System Definition---------------------------------
+
+#Simulation Box
+
+
+read_restart		pp_restart_ncl_%.5000.bin
+
+
+#---------------------------------Simulation Settings---------------------------------------
+
+#force field
+
+#pair_coeff	1 1 0.0103 3.405 8.5
+#pair_coeff	2 2 0.41148 2.34 6.5
+#pair_coeff	3 3 0.41148 2.34 6.5
+#pair_coeff	2 3 0.41148 2.34 6.5
+#pair_coeff	1 2 $(v_wI*0.06489) 2.872 11.9
+#pair_coeff	1 3 $(v_wO*0.06489) 2.872 11.9
+
+neighbor	0.35 bin
+neigh_modify	delay 1
+
+#groups
+
+#group			ar type 1
+#group			cuI type 2		#hydrophIllic
+#group			cuO type 3		#hydrophObic
+#group			cu union cuI cuO
+
+#settings
+
+#timestep	0.005
+
+#Apply fix
+
+fix		1 cu spring/self 4.3
+
+shell		mkdir trajectory_ncl_$f
+shell		cd trajectory_ncl_$f
+
+fix		2 ar nvt temp $t $t $(10*dt)
+fix		myfix cu nvt temp $t $t $(10*dt)
+thermo		100
+thermo_modify	lost ignore
+#dump		1 all custom 100 tarj.all_atom.*.txt id type x y z
+dump			1 all atom 100 traj_all_atom_*.txt
+run		3000  
+
+shell		cd ..
+undump		1
+
+compute	arTemp ar temp
+compute	cuTemp cu temp 
+thermo		1000
+thermo_style	custom step temp c_arTemp c_cuTemp etotal press  
+run		12000
